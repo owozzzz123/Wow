@@ -1,0 +1,49 @@
+#!/bin/bash
+set -e
+
+cd ~/lsposed_build_project || { echo "Project folder not found"; exit 1; }
+
+echo ">>> 1. settings.gradle 생성"
+cp settings.gradle settings.gradle.bak 2>/dev/null || true
+cat > settings.gradle <<'EOF'
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'lsposed_build_project'
+EOF
+echo "settings.gradle 생성 완료"
+
+echo ">>> 2. build.gradle 패치 (plugins 블록 앞 buildscript/allprojects 제거)"
+if [ -f build.gradle ]; then
+    cp build.gradle build.gradle.bak
+    plugins_line=$(grep -n '^plugins {' build.gradle | cut -d: -f1 | head -n1)
+    if [ -z "$plugins_line" ]; then
+        echo "plugins 블록을 찾지 못했습니다. build.gradle 확인 필요"
+    else
+        # plugins 블록 이전 줄 제거
+        tail -n +$plugins_line build.gradle > build.gradle.tmp
+        mv build.gradle.tmp build.gradle
+        echo "build.gradle 패치 완료"
+    fi
+else
+    echo "build.gradle 없음! 확인 필요"
+    exit 1
+fi
+
+echo ">>> 3. Gradle wrapper 생성"
+gradle wrapper
+chmod +x ./gradlew
+
+echo ">>> 4. Gradle 캐시 갱신 + Debug 빌드"
+./gradlew --no-daemon --refresh-dependencies clean assembleDebug --stacktrace --info

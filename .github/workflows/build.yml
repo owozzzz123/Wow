@@ -1,0 +1,109 @@
+name: Build Android (GitHub CI)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-levels: 33
+          components: platform-tools,build-tools;33.0.2,platforms;android-33
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            .gradle
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*','**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Make gradlew executable if present
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            echo "found gradlew"
+          else
+            echo "no gradlew in repo"
+          fi
+
+      - name: Ensure settings.gradle exists (plugin repos)
+        run: |
+          if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
+            cat > settings.gradle <<'EOF'
+pluginManagement {
+  repositories {
+    gradlePluginPortal()
+    google()
+    mavenCentral()
+  }
+}
+dependencyResolutionManagement {
+  repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+  repositories {
+    google()
+    mavenCentral()
+  }
+}
+rootProject.name = 'lsposed_build_project'
+EOF
+            echo "created settings.gradle"
+          else
+            echo "settings.gradle (or .kts) exists, skipping create"
+          fi
+
+      - name: Create gradle wrapper if missing (CI fallback)
+        run: |
+          if [ ! -f ./gradlew ]; then
+            echo "No gradlew: installing gradle and creating wrapper..."
+            sudo apt-get update -y
+            sudo apt-get install -y unzip wget zip
+            wget https://services.gradle.org/distributions/gradle-9.0-bin.zip -O gradle-9.0-bin.zip
+            unzip -qq gradle-9.0-bin.zip -d /opt
+            export PATH=/opt/gradle-9.0/bin:$PATH
+            gradle -v
+            gradle wrapper
+            chmod +x ./gradlew
+          else
+            echo "gradlew present, skipping wrapper creation"
+          fi
+
+      - name: Build (try release, fallback to debug)
+        run: |
+          set -e
+          if [ -f ./gradlew ]; then
+            ./gradlew --no-daemon --stacktrace clean assembleRelease || { echo "assembleRelease failed, trying assembleDebug"; ./gradlew --no-daemon --stacktrace clean assembleDebug; exit 0; }
+          else
+            gradle --no-daemon --stacktrace clean assembleRelease || { echo "assembleRelease failed, trying assembleDebug"; gradle --no-daemon --stacktrace clean assembleDebug; exit 0; }
+          fi
+
+      - name: Upload build artifacts (APK / AAR)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build
+          path: |
+            **/build/outputs/apk/**/*.apk
+            **/build/outputs/aar/*.aar
+            **/build/outputs/apk/*.apk
